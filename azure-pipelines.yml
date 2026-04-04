@@ -2,7 +2,7 @@
 #changes for feature-1 
 trigger:
 - main
-
+#feature-
 resources:
 - repo: self
 
