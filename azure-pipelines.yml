@@ -3,7 +3,7 @@
 # https://docs.microsoft.com/azure/devops/pipelines/languages/dockerasd
 #feature-1 changes number 2
 # https://docs.microsoft.com/azure/devops/pipelines/languages/dockerasd ch
-#feature 1 changes to main
+#feature 1 changes to main pr
 trigger:
 - main
 
