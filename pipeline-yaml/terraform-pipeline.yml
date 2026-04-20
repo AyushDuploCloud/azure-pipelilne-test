@@ -1,0 +1,139 @@
+# pipelines/terraform-pipeline.yml
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - terraform/*        # only triggers when tf files change
+
+pool:
+  vmImage: 'ubuntu-latest' # pipeline runs on a Linux machine
+
+variables:
+  - group: terraform-secrets # links to your Variable Group in Azure DevOps
+  - name: TF_WORKING_DIR
+    value: '$(System.DefaultWorkingDirectory)/terraform'
+
+stages:
+
+# ─────────────────────────────────────────
+# STAGE 1 — INIT & PLAN
+# ─────────────────────────────────────────
+- stage: Plan
+  displayName: 'Terraform Plan'
+  jobs:
+  - job: TerraformPlan
+    displayName: 'Init and Plan'
+    steps:
+
+    # Step 1 - Install Terraform
+    - task: TerraformInstaller@1
+      displayName: 'Install Terraform'
+      inputs:
+        terraformVersion: 'latest'
+
+    # Step 2 - terraform init
+    - task: TerraformTaskV4@4
+      displayName: 'Terraform Init'
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(TF_WORKING_DIR)'
+      env:
+        ARM_CLIENT_ID:       $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET:   $(ARM_CLIENT_SECRET)
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_TENANT_ID:       $(ARM_TENANT_ID)
+
+    # Step 3 - terraform plan
+    - task: TerraformTaskV4@4
+      displayName: 'Terraform Plan'
+      inputs:
+        provider: 'azurerm'
+        command: 'plan'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        commandOptions: '-out=tfplan'  # saves the plan to a file
+      env:
+        ARM_CLIENT_ID:       $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET:   $(ARM_CLIENT_SECRET)
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_TENANT_ID:       $(ARM_TENANT_ID)
+
+    # Step 4 - Save plan file for next stage
+    - task: PublishPipelineArtifact@1
+      displayName: 'Save Plan File'
+      inputs:
+        targetPath: '$(TF_WORKING_DIR)/tfplan'
+        artifact: 'tfplan'
+
+# ─────────────────────────────────────────
+# STAGE 2 — MANUAL APPROVAL GATE
+# ─────────────────────────────────────────
+- stage: Approve
+  displayName: 'Waiting for Approval'
+  dependsOn: Plan
+  jobs:
+  - job: waitForApproval
+    displayName: 'Approve Terraform Apply'
+    pool: server          # runs on Azure DevOps server, not an agent
+    steps:
+    - task: ManualValidation@0
+      displayName: 'Review Plan and Approve'
+      inputs:
+        notifyUsers: 'ayush@duplocloud.net'  # 👈 change this
+        instructions: 'Review the Terraform plan and approve to apply'
+        onTimeout: 'reject'   # auto rejects if no one approves in time
+        timeoutInMinutes: 60  # 1 hour to approve
+
+# ─────────────────────────────────────────
+# STAGE 3 — APPLY
+# ─────────────────────────────────────────
+- stage: Apply
+  displayName: 'Terraform Apply'
+  dependsOn: Approve
+  jobs:
+  - job: TerraformApply
+    displayName: 'Apply Infrastructure'
+    steps:
+
+    # Step 1 - Install Terraform again (fresh agent)
+    - task: TerraformInstaller@1
+      displayName: 'Install Terraform'
+      inputs:
+        terraformVersion: 'latest'
+
+    # Step 2 - Download saved plan file
+    - task: DownloadPipelineArtifact@2
+      displayName: 'Download Plan File'
+      inputs:
+        artifact: 'tfplan'
+        path: '$(TF_WORKING_DIR)'
+
+    # Step 3 - terraform init again (fresh agent needs it)
+    - task: TerraformTaskV4@4
+      displayName: 'Terraform Init'
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(TF_WORKING_DIR)'
+      env:
+        ARM_CLIENT_ID:       $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET:   $(ARM_CLIENT_SECRET)
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_TENANT_ID:       $(ARM_TENANT_ID)
+
+    # Step 4 - terraform apply using saved plan
+    - task: TerraformTaskV4@4
+      displayName: 'Terraform Apply'
+      inputs:
+        provider: 'azurerm'
+        command: 'apply'
+        workingDirectory: '$(TF_WORKING_DIR)'
+        commandOptions: 'tfplan'   # uses the saved plan exactly
+      env:
+        ARM_CLIENT_ID:       $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET:   $(ARM_CLIENT_SECRET)
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_TENANT_ID:       $(ARM_TENANT_ID)
